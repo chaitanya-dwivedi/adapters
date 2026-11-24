@@ -12,8 +12,17 @@ exec 9>/tmp/aw_boot.lock; flock -n 9 || exit 0
 
   log() { printf '[aw-boot] %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> /logs/aw/boot.log; }
 
-  ACCEL="-accel off"
-  if [ -e /dev/kvm ]; then ACCEL="-accel on"; fi
+  if [ ! -e /dev/kvm ] && [ "${ANDROIDWORLD_ALLOW_TCG:-0}" != "1" ]; then
+    msg="AndroidWorld requires /dev/kvm. Set ANDROIDWORLD_ALLOW_TCG=1 only for slow software-emulation debugging."
+    log "ERROR: $msg"
+    printf '%s\n' "$msg" >&2
+    exit 1
+  fi
+
+  ACCEL="-accel on"
+  if [ ! -e /dev/kvm ]; then
+    ACCEL="-accel off -qemu -accel tcg,thread=multi"
+  fi
   log "starting boot (emulator=$EMULATOR_NAME accel='$ACCEL')"
 
   adb kill-server >/dev/null 2>&1 || true

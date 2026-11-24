@@ -110,10 +110,11 @@ harbor run -p datasets/androidworld-parity --agent-import-path androidworld.agen
 - Information-retrieval answers are comma-split by upstream's checker, so ground-truth strings that contain commas may not be satisfiable by anyone (including this oracle).
 - Date/time is frozen to Oct 2023 by upstream setup; tasks derived from "now" at export time (e.g. `MarkorCreateFolder` folder name) are frozen in `tasks.json`.
 - App APK installation happens on first boot via upstream `setup_apps` (network required); baking a snapshot into the image would speed this up.
+- Each generated task includes `environment/docker-compose.yaml` (passing `/dev/kvm` and a `/ready` `healthcheck`). If `/dev/kvm` is absent, `boot.sh` fails fast unless `ANDROIDWORLD_ALLOW_TCG=1` is set explicitly for slow multi-threaded software emulation debugging.
 
 ## Troubleshooting
 
-- **Missing `/dev/kvm` or emulator boot timeout (`-accel off`)**: Running the x86_64 API-33 emulator without KVM hardware acceleration is too slow and typically hits boot timeouts (`boot.sh` waits up to 600s for `sys.boot_completed=1`). Verify host capability with `scripts/check_emulator_host.sh` before running trials; use a Linux `x86_64` host with `/dev/kvm` (Docker `--device /dev/kvm --privileged` or bare-metal/VM KVM) rather than Apple Silicon or Daytona sandboxes without `/dev/kvm`.
+- **Missing `/dev/kvm` or emulator boot timeout (`-accel off`)**: Running the x86_64 API-33 emulator without KVM hardware acceleration is too slow and typically hits boot timeouts (`boot.sh` fails fast when `/dev/kvm` is absent unless `ANDROIDWORLD_ALLOW_TCG=1` is set). Verify host capability with `scripts/check_emulator_host.sh` before running trials; use a Linux `x86_64` host with `/dev/kvm` (Docker via `environment/docker-compose.yaml` or bare-metal/VM KVM) rather than Apple Silicon or Daytona sandboxes without `/dev/kvm`.
 - **First-boot APK installation failures**: `setup_apps` downloads benchmark APKs on first emulator boot, so outbound network access is required unless APKs/snapshots are pre-baked into the image. Inspect `/logs/aw/emulator.log` and `/logs/aw/daemon.log` inside the container if initialization fails.
 - **`harbor lint` reports `shared-verifier`**: Expected for all AndroidWorld tasks because the verifier must query the live in-container daemon (`/opt/aw/client.py score`) against the running emulator. Run `harbor lint --ignore shared-verifier datasets/androidworld/*`.
 

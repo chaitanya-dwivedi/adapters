@@ -276,8 +276,17 @@ esac
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["ANDROID_HOME"] = str(tmp_path / "android_sdk")
+    if not Path("/dev/kvm").exists():
+        res_fail = subprocess.run(["bash", str(patched_boot)], env=env, capture_output=True, text=True, check=False)
+        assert res_fail.returncode == 1
+        assert "ANDROIDWORLD_ALLOW_TCG=1" in res_fail.stderr
+        assert "ANDROIDWORLD_ALLOW_TCG=1" in (logs_dir / "boot.log").read_text(encoding="utf-8")
+
+    env["ANDROIDWORLD_ALLOW_TCG"] = "1"
     res = subprocess.run(["bash", str(patched_boot)], env=env, capture_output=True, text=True, check=False)
     assert res.returncode == 0, res.stderr
+    if not Path("/dev/kvm").exists():
+        assert "accel='-accel off -qemu -accel tcg,thread=multi'" in (logs_dir / "boot.log").read_text(encoding="utf-8")
 
     calls = call_log.read_text(encoding="utf-8").splitlines()
     root_idx = next(i for i, c in enumerate(calls) if c == "root")
@@ -285,6 +294,16 @@ esac
     settings_idx = next(i for i, c in enumerate(calls) if "settings put global" in c)
     assert root_idx < wait_idx < settings_idx
     assert (logs_dir / "boot.log").exists()
+
+
+def test_docker_compose_yaml_passes_kvm_and_healthcheck() -> None:
+    compose_path = DOCKERFILE_PATH.parent / "docker-compose.yaml"
+    assert compose_path.is_file()
+    text = compose_path.read_text(encoding="utf-8")
+    assert "/dev/kvm" in text
+    assert "privileged: true" not in text
+    assert "ANDROIDWORLD_ALLOW_TCG" in text
+    assert "http://127.0.0.1:5000/ready" in text
 
 
 def test_dockerfile_defines_android_home_and_sdk_root() -> None:
