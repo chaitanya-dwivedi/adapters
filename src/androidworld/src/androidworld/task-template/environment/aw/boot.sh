@@ -2,21 +2,55 @@
 # Idempotent: boots the headless emulator + AndroidWorld daemon (which initializes the task).
 # Safe to call repeatedly (entrypoint, solve.sh, test.sh and the agent may all call it).
 mkdir -p /logs/aw
-if pgrep -f "aw/daemon.py" >/dev/null; then exit 0; fi
+if pgrep -f "[a]w/daemon.py" >/dev/null 2>&1; then exit 0; fi
 exec 9>/tmp/aw_boot.lock; flock -n 9 || exit 0
 (
+  export ANDROID_HOME="${ANDROID_HOME:-/opt/android}"
+  export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+  export EMULATOR_NAME="${EMULATOR_NAME:-AndroidWorldAvd}"
+  export PATH="$PATH:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator"
+
+  log() { printf '[aw-boot] %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> /logs/aw/boot.log; }
+
   ACCEL="-accel off"
   if [ -e /dev/kvm ]; then ACCEL="-accel on"; fi
-  adb kill-server; adb start-server
+  log "starting boot (emulator=$EMULATOR_NAME accel='$ACCEL')"
+
+  adb kill-server >/dev/null 2>&1 || true
+  adb start-server >> /logs/aw/boot.log 2>&1
+  # Clean up any orphan emulator holding console/gRPC ports before launching a fresh one.
+  adb devices | awk '/^emulator-/{print $1}' | while read -r serial; do
+    adb -s "$serial" emu kill >/dev/null 2>&1 || true
+  done
+
   nohup emulator @"${EMULATOR_NAME}" -no-window -no-snapshot -no-boot-anim -noaudio \
       -memory 4096 $ACCEL -gpu swiftshader_indirect -grpc 8554 > /logs/aw/emulator.log 2>&1 &
+
+  booted=0
   for i in $(seq 1 150); do
-    [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
+    if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+      booted=1
+      break
+    fi
     sleep 4
   done
-  adb root || true
-  adb shell input keyevent 82 || true
-  adb shell "settings put global window_animation_scale 0.0; settings put global transition_animation_scale 0.0; settings put global animator_duration_scale 0.0"
-  adb shell "settings put global hidden_api_policy_pre_p_apps 1; settings put global hidden_api_policy_p_apps 1; settings put global hidden_api_policy 1"
+  if [ "$booted" != "1" ]; then
+    log "ERROR: emulator failed to complete boot within 600s"
+    exit 1
+  fi
+  log "emulator boot_completed=1; restarting adbd as root"
+
+  adb root >> /logs/aw/boot.log 2>&1 || true
+  adb wait-for-device
+  for i in $(seq 1 30); do
+    if adb shell true >/dev/null 2>&1; then break; fi
+    sleep 1
+  done
+
+  adb shell input keyevent 82 >> /logs/aw/boot.log 2>&1 || true
+  adb shell "settings put global window_animation_scale 0.0; settings put global transition_animation_scale 0.0; settings put global animator_duration_scale 0.0" >> /logs/aw/boot.log 2>&1 || true
+  adb shell "settings put global hidden_api_policy_pre_p_apps 1; settings put global hidden_api_policy_p_apps 1; settings put global hidden_api_policy 1" >> /logs/aw/boot.log 2>&1 || true
+
   nohup python3 /opt/aw/daemon.py > /logs/aw/daemon.log 2>&1 &
+  log "launched /opt/aw/daemon.py"
 ) 9>&-

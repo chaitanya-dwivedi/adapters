@@ -10,6 +10,7 @@ import json
 import os
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Mapping
@@ -82,10 +83,22 @@ def strip_provider_prefix(model_name: str) -> str:
     return model_name
 
 
+def is_reasoning_or_gpt5_model(model_name: str) -> bool:
+    """Return True for OpenAI reasoning / GPT-5 series models with chat-completions quirks."""
+    wire = strip_provider_prefix(model_name).strip().lower()
+    for prefix in ("gpt-5", "o1", "o3", "o4"):
+        if wire == prefix or wire.startswith(f"{prefix}-") or wire.startswith(f"{prefix}."):
+            return True
+    return False
+
+
 def build_openai_chat_url(base_url: str | None) -> str:
     base = (base_url or DEFAULT_OPENAI_BASE_URL).strip().rstrip("/")
     if base.endswith("/chat/completions"):
         return base
+    parsed = urllib.parse.urlparse(base)
+    if parsed.path in ("", "/"):
+        return f"{base}/v1/chat/completions"
     return f"{base}/chat/completions"
 
 
@@ -180,6 +193,7 @@ class T3ALlmClient:
         if self.protocol == "anthropic":
             headers = {
                 "Content-Type": "application/json",
+                "User-Agent": "harbor-androidworld/0.1",
                 "x-api-key": self.api_key,
                 "anthropic-version": DEFAULT_ANTHROPIC_VERSION,
             }
@@ -193,14 +207,18 @@ class T3ALlmClient:
 
         headers = {
             "Content-Type": "application/json",
+            "User-Agent": "harbor-androidworld/0.1",
             "Authorization": f"Bearer {self.api_key}",
         }
         payload = {
             "model": self.wire_model,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
             "messages": [{"role": "user", "content": prompt}],
         }
+        if is_reasoning_or_gpt5_model(self.wire_model):
+            payload["max_completion_tokens"] = self.max_tokens
+        else:
+            payload["temperature"] = self.temperature
+            payload["max_tokens"] = self.max_tokens
         return self.endpoint_url, headers, payload
 
     def parse_response(self, body: dict[str, Any]) -> LlmPrediction:
@@ -291,7 +309,7 @@ class T3ALlmClient:
         return LlmPrediction(
             text=ERROR_CALLING_LLM,
             is_safe=None,
-            raw_response=None if last_error is None else None,
+            raw_response=None,
         )
 
     def predict(self, text_prompt: str) -> tuple[str, bool | None, Any]:

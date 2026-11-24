@@ -467,6 +467,71 @@ def test_llm_client_retries_and_safety_classifier(
     assert pred.is_safe is False
 
 
+def test_llm_client_2077ai_gpt5_and_verified_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[str, dict[str, str], dict[str, Any]]] = []
+
+    def fake_post(self, url, headers, payload):
+        captured.append((url, headers, payload))
+        if self.protocol == "anthropic":
+            return {
+                "content": [{"type": "text", "text": "Reason: OK.\nAction: {\"action_type\": \"wait\"}"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+            }
+        return {
+            "choices": [{"message": {"content": "Reason: OK.\nAction: {\"action_type\": \"wait\"}"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+
+    monkeypatch.setattr(T3ALlmClient, "_post_json", fake_post)
+
+    # 1. gpt-5-mini and gpt-5.4 at https://app.ppapi.ai/v1 and https://app.ppapi.ai
+    for model_id in ("openai/gpt-5-mini", "gpt-5-mini", "openai/gpt-5.4", "gpt-5.4"):
+        for base in ("https://app.ppapi.ai/v1", "https://app.ppapi.ai"):
+            captured.clear()
+            client = T3ALlmClient(
+                model_name=model_id,
+                env={"OPENAI_BASE_URL": base, "OPENAI_API_KEY": "sk-test"},
+            )
+            client.predict_with_usage("hi")
+            url, headers, payload = captured[0]
+            assert url == "https://app.ppapi.ai/v1/chat/completions"
+            assert headers["Authorization"] == "Bearer sk-test"
+            assert payload["model"] == model_id.removeprefix("openai/")
+            assert payload["max_completion_tokens"] == 1000
+            assert "max_tokens" not in payload
+            assert "temperature" not in payload
+
+    # 2. gpt-4o preserves temperature & max_tokens and normalizes root base_url
+    captured.clear()
+    client_4o = T3ALlmClient(
+        model_name="gpt-4o",
+        env={"OPENAI_BASE_URL": "https://app.ppapi.ai", "OPENAI_API_KEY": "sk-test"},
+    )
+    client_4o.predict_with_usage("hi")
+    assert captured[0][0] == "https://app.ppapi.ai/v1/chat/completions"
+    assert captured[0][2]["max_tokens"] == 1000
+    assert captured[0][2]["temperature"] == 0.0
+    assert "max_completion_tokens" not in captured[0][2]
+
+    # 3. claude-sonnet-4-6 and claude-haiku-4-5 at https://app.ppapi.ai and https://app.ppapi.ai/v1
+    for model_id in ("claude-sonnet-4-6", "anthropic/claude-sonnet-4-6", "claude-haiku-4-5"):
+        for base in ("https://app.ppapi.ai", "https://app.ppapi.ai/v1"):
+            captured.clear()
+            client_c = T3ALlmClient(
+                model_name=model_id,
+                env={"ANTHROPIC_BASE_URL": base, "ANTHROPIC_API_KEY": "sk-ant"},
+            )
+            client_c.predict_with_usage("hi")
+            assert client_c.protocol == "anthropic"
+            assert captured[0][0] == "https://app.ppapi.ai/v1/messages"
+            assert captured[0][2]["model"] == model_id.removeprefix("anthropic/")
+            assert captured[0][2]["max_tokens"] == 1000
+            assert captured[0][2]["temperature"] == 0.0
+
+
 # ---------------------------------------------------------------------------
 # 3. Harbor BaseAgent Contract + Full Mocked Episode Parity vs Upstream T3A
 # ---------------------------------------------------------------------------

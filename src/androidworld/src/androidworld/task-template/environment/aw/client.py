@@ -14,7 +14,11 @@ def call(path, method="GET", timeout=900):
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, json.loads(r.read())
     except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read() or b"{}")
+        raw = e.read() or b"{}"
+        try:
+            return e.code, json.loads(raw)
+        except Exception:  # noqa: BLE001
+            return e.code, {"error": raw.decode(errors="replace")}
 
 
 def wait(max_s=1500):
@@ -42,5 +46,7 @@ if __name__ == "__main__":
             print("daemon never became ready", file=sys.stderr)
             sys.exit(2)
         code, body = call("/" + cmd, "POST")
+        if code != 200 and isinstance(body, dict) and body.get("error"):
+            print(body["error"], file=sys.stderr)
         print(json.dumps(body))
         sys.exit(0 if code == 200 else 1)

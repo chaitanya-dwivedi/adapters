@@ -19,6 +19,8 @@ import datetime
 import json
 import os
 import re
+import shlex
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -45,12 +47,12 @@ class Dev:
         return r.generic.output.decode(errors="replace").replace("\r", "")
 
     def cat(self, path: str) -> str:
-        return self.sh("cat", path)
+        return self.sh("cat", shlex.quote(path))
 
     def write_bytes(self, remote: str, data: bytes) -> None:
         from android_world.utils import file_utils
 
-        self.sh("mkdir", "-p", os.path.dirname(remote))
+        self.sh("mkdir", "-p", shlex.quote(os.path.dirname(remote)))
         with tempfile.TemporaryDirectory() as d:
             local = os.path.join(d, os.path.basename(remote) or "f")
             Path(local).write_bytes(data)
@@ -64,6 +66,8 @@ class Dev:
         """Pull a SQLite DB, yield a connection, commit, push back, close the app."""
         from android_world.env import adb_utils
 
+        if app_name:
+            adb_utils.close_app(app_name, self.env.controller)
         with self.env.controller.pull_file(remote_db, 10) as d:
             local = os.path.join(d, os.path.basename(remote_db))
             conn = sqlite3.connect(local)
@@ -72,6 +76,7 @@ class Dev:
                 conn.commit()
             finally:
                 conn.close()
+            self.sh("rm", "-f", shlex.quote(remote_db + "-wal"), shlex.quote(remote_db + "-shm"))
             self.env.controller.push_file(local, remote_db, 10)
         if app_name:
             adb_utils.close_app(app_name, self.env.controller)
@@ -85,16 +90,21 @@ class Dev:
         from android_world.env import adb_utils
 
         labels = [x.lower() for x in ([labels] if isinstance(labels, str) else labels)]
-        end = time.time() + timeout
-        while time.time() < end:
+        attempts = max(1, int(timeout))
+        for _ in range(attempts):
             for el in self.ui_elements():
+                if getattr(el, "is_visible", True) is False:
+                    continue
+                bbox = getattr(el, "bbox_pixels", None)
+                if not bbox or bbox.width <= 0 or bbox.height <= 0:
+                    continue
                 for attr in (el.text, el.content_description):
-                    if attr and el.bbox_pixels and (
+                    if attr and (
                         attr.strip().lower() in labels
                         if exact
                         else any(l in attr.lower() for l in labels)
                     ):
-                        x, y = el.bbox_pixels.center
+                        x, y = bbox.center
                         adb_utils.tap_screen(int(x), int(y), self.env.controller)
                         time.sleep(1.0)
                         return True
@@ -104,7 +114,9 @@ class Dev:
     def has_label(self, labels) -> bool:
         labels = [x.lower() for x in ([labels] if isinstance(labels, str) else labels)]
         return any(
-            a and a.strip().lower() in labels
+            getattr(el, "is_visible", True) is not False
+            and a
+            and a.strip().lower() in labels
             for el in self.ui_elements()
             for a in (el.text, el.content_description)
         )
@@ -228,19 +240,32 @@ def answer_from_ground_truth(env, task, spec):
 
 
 # --------------------------------------------------------------------------- system settings
+def _wait_setting(d: Dev, namespace: str, key: str, expected: set[str], retries: int = 10) -> None:
+    for _ in range(retries):
+        if d.sh("settings", "get", namespace, key).strip() in expected:
+            return
+        time.sleep(0.5)
+
+
 def system_toggle(env, task, spec):
     from android_world.env import adb_utils
 
+    d = _dev(env)
     name, p = spec["name"], task.params
     if name == "TurnOffWifiAndTurnOnBluetooth":
         adb_utils.toggle_wifi(env.controller, "off")
         adb_utils.toggle_bluetooth(env.controller, "on")
+        _wait_setting(d, "global", "wifi_on", {"0"})
+        _wait_setting(d, "global", "bluetooth_on", {"1"})
     elif "Wifi" in name:
         adb_utils.toggle_wifi(env.controller, p["on_or_off"])
+        _wait_setting(d, "global", "wifi_on", {"1", "2"} if p["on_or_off"] == "on" else {"0"})
     elif "Bluetooth" in name:
         adb_utils.toggle_bluetooth(env.controller, p["on_or_off"])
+        _wait_setting(d, "global", "bluetooth_on", {"1"} if p["on_or_off"] == "on" else {"0"})
     elif "Brightness" in name:
         adb_utils.set_brightness(p["max_or_min"], env.controller)
+        _wait_setting(d, "system", "screen_brightness", {"255"} if p["max_or_min"] == "max" else {"1"})
     else:
         raise NotImplementedError(name)
 
@@ -254,25 +279,32 @@ def system_copy_clipboard(env, task, spec):
 def system_open_app(env, task, spec):
     from android_world.env import adb_utils
 
+    d = _dev(env)
     if spec["name"] == "TurnOnWifiAndOpenApp":
         adb_utils.toggle_wifi(env.controller, "on")
+        _wait_setting(d, "global", "wifi_on", {"1", "2"})
     adb_utils.launch_app(task.params["app_name"], env.controller)
+    for _ in range(10):
+        act, _ = adb_utils.get_current_activity(env.controller)
+        if act and "launcher" not in act.lower():
+            break
+        time.sleep(1.0)
 
 
 # --------------------------------------------------------------------------- files / markor
 def files_delete(env, task, spec):
     t = task.delete_file_task
-    _dev(env).sh("rm", "-f", os.path.join(t.data_directory, task.params["file_name"]))
+    _dev(env).sh("rm", "-f", shlex.quote(os.path.join(t.data_directory, task.params["file_name"])))
 
 
 def files_move(env, task, spec):
     d, t, f = _dev(env), task.move_file_task, task.params["file_name"]
-    d.sh("mkdir", "-p", t.dest_directory)
-    d.sh("mv", os.path.join(t.source_directory, f), os.path.join(t.dest_directory, f))
+    d.sh("mkdir", "-p", shlex.quote(t.dest_directory))
+    d.sh("mv", shlex.quote(os.path.join(t.source_directory, f)), shlex.quote(os.path.join(t.dest_directory, f)))
 
 
 def markor_create_folder(env, task, spec):
-    _dev(env).sh("mkdir", "-p", f"{MARKOR}/{task.params['folder_name']}")
+    _dev(env).sh("mkdir", "-p", shlex.quote(f"{MARKOR}/{task.params['folder_name']}"))
 
 
 def markor_delete_all(env, task, spec):
@@ -282,7 +314,7 @@ def markor_delete_all(env, task, spec):
 
 def markor_delete_newest(env, task, spec):
     newest = task.initial_file_list_sorted[-1]  # ascending by change_time
-    _dev(env).sh("rm", "-f", f"{MARKOR}/{newest.file_name}")
+    _dev(env).sh("rm", "-f", shlex.quote(f"{MARKOR}/{newest.file_name}"))
 
 
 def markor_create_note(env, task, spec):
@@ -311,13 +343,13 @@ def markor_edit_note(env, task, spec):
 
 def markor_change_note_content(env, task, spec):
     d, p = _dev(env), task.params
-    d.sh("rm", "-f", f"{MARKOR}/{p['original_name']}")
+    d.sh("rm", "-f", shlex.quote(f"{MARKOR}/{p['original_name']}"))
     d.write_text(f"{MARKOR}/{p['new_name']}", p["updated_content"] + "\n")
 
 
 def markor_add_note_header(env, task, spec):
     d, p = _dev(env), task.params
-    d.sh("rm", "-f", f"{MARKOR}/{p['original_name']}")
+    d.sh("rm", "-f", shlex.quote(f"{MARKOR}/{p['original_name']}"))
     # checker: exact match of header + "\n\n" + original_content + "\n"
     d.write_text(f"{MARKOR}/{p['new_name']}", p["header"] + "\n\n" + p["original_content"] + "\n")
 
@@ -361,8 +393,30 @@ def sql_delete_duplicate(env, task, spec):
 def _send_sms(env, number, message):
     from android_world.env import adb_utils, tools
 
-    tools.AndroidToolController(env.controller).send_sms(number, message)
-    time.sleep(3.0)
+    d = _dev(env)
+    if any(ch in message for ch in ('"', "$", "`", "\\")):
+        safe_msg = message.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
+        adb_utils.send_android_intent(
+            command="start",
+            action="android.intent.action.SENDTO",
+            env=env.controller,
+            data_uri=f"sms:{number}",
+            extras={"sms_body": safe_msg},
+        )
+        time.sleep(5.0)
+        pkg = adb_utils.extract_package_name(adb_utils.get_current_activity(env.controller)[0] or "")
+        send_label = tools.SMS_SEND_TEXT if pkg == "com.google.android.apps.messaging" else tools.SIMPLE_SMS_SEND_TEXT
+        assert d.tap_label(send_label), f"SMS send button {send_label!r} not found"
+    else:
+        tools.AndroidToolController(env.controller).send_sms(number, message)
+
+    clean_num = re.sub(r"[-\s]", "", number)
+    for _ in range(10):
+        raw = d.sh("content", "query", "--uri", "content://sms/sent", "--projection", "address:body")
+        rows = parse_content_rows(raw, ["address", "body"])
+        if any(re.sub(r"[-\s]", "", r.get("address", "")) == clean_num and r.get("body") == message for r in rows):
+            break
+        time.sleep(1.5)
     adb_utils.launch_app("simple sms messenger", env.controller)  # checker wants this app in front
     time.sleep(2.0)
 
@@ -388,9 +442,12 @@ def contacts_draft(env, task, spec):
 
     p = task.params
     ptype = {"Home": 1, "Work": 3, "Mobile": 2}[p["phone_label"]]
+    adb_utils.close_app("contacts", env.controller)
+    full_name = shlex.quote(f"{p['first']} {p['last']}")
+    phone = shlex.quote(p["phone"])
     cmd = (
         "am start -a android.intent.action.INSERT -t vnd.android.cursor.dir/contact "
-        f'-e name "{p["first"]} {p["last"]}" -e phone "{p["phone"]}" --ei phone_type {ptype}'
+        f"-e name {full_name} -e phone {phone} --ei phone_type {ptype}"
     )
     adb_utils.issue_generic_request(["shell", cmd], env.controller)
     time.sleep(3.0)  # editor stays open, NOT saved (task says do not hit save)
@@ -435,8 +492,8 @@ def _cdp_session(port=9222, timeout=60):
     import websocket  # websocket-client
 
     subprocess.run(["adb", "forward", f"tcp:{port}", "localabstract:chrome_devtools_remote"], check=True)
-    end = time.time() + timeout
-    while time.time() < end:
+    attempts = max(1, int(timeout // 2))
+    for _ in range(attempts):
         try:
             tabs = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/json", timeout=5))
             pages = [t for t in tabs if t.get("type") == "page" and "10.0.2.2" in t.get("url", "")]
@@ -469,28 +526,37 @@ def _open_task_html_in_chrome(d: Dev):
     web = Path(tempfile.mkdtemp())
     (web / "task.html").write_text(d.cat(f"{DOWNLOAD}/task.html"))
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(web))
-    srv = http.server.ThreadingHTTPServer(("0.0.0.0", 8123), handler)
+    srv = http.server.ThreadingHTTPServer(("0.0.0.0", 0), handler)
+    port = srv.server_address[1]
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    d.sh("am", "start", "-a", "android.intent.action.VIEW", "-d", "http://10.0.2.2:8123/task.html",
+    d.sh("am", "start", "-a", "android.intent.action.VIEW", "-d", f"http://10.0.2.2:{port}/task.html",
          "-n", "com.android.chrome/com.google.android.apps.chrome.Main")
     for _ in range(6):  # dismiss Chrome first-run screens if they appear
         time.sleep(3)
         if not d.tap_label(["Accept & continue", "Use without an account", "No thanks", "Got it",
                             "Not now", "Skip"], timeout=3):
             break
-    return srv
+    return srv, web
 
 
 def _browser(env, body):
     d = _dev(env)
-    srv = _open_task_html_in_chrome(d)
+    srv, web = _open_task_html_in_chrome(d)
+    ws = None
     try:
-        ws = _cdp_session()
+        ws = _cdp_session(port=9222)
         body(ws)
         time.sleep(2)
-        ws.close()
     finally:
+        if ws is not None:
+            try:
+                ws.close()
+            except Exception:  # noqa: BLE001
+                pass
+        subprocess.run(["adb", "forward", "--remove", "tcp:9222"], check=False)
         srv.shutdown()
+        srv.server_close()
+        shutil.rmtree(web, ignore_errors=True)
 
 
 def browser_maze(env, task, spec):
@@ -513,14 +579,25 @@ def browser_multiply(env, task, spec):
 
 def browser_draw(env, task, spec):
     def body(ws):
-        _cdp_eval(ws, "taskColors.forEach((c,i)=>{ctx.strokeStyle=c;ctx.lineWidth=10;ctx.beginPath();"
-                      "ctx.moveTo(10,40+i*60);ctx.lineTo(290,40+i*60);ctx.stroke();}); "
+        _cdp_eval(ws, "taskColors.forEach((c,i)=>{ctx.fillStyle=c;ctx.fillRect(10,20+i*60,100,30);}); "
                       "document.getElementById('submitButton').click(); 1")
 
     _browser(env, body)
 
 
 # --------------------------------------------------------------------------- music / video DBs
+def _sql_int(val, default: int = 0) -> int:
+    if val is None or val == "" or str(val).upper() == "NULL":
+        return default
+    return int(val)
+
+
+def _sql_str(val, default: str = "") -> str:
+    if val is None or str(val).upper() == "NULL":
+        return default
+    return str(val)
+
+
 def _media_info(d: Dev, titles: list[str]) -> list[dict]:
     keys = ["_id", "title", "duration", "_data", "album_id", "album", "artist_id", "artist", "year"]
     out = []
@@ -542,11 +619,11 @@ def _media_info(d: Dev, titles: list[str]) -> list[dict]:
 
 
 def _song_values(info: dict) -> dict:
-    return {"id": int(info["_id"]), "title": info["title"], "duration": int(info["duration"] or 0),
-            "data": info["_data"], "album_id": int(info.get("album_id") or 0),
-            "album_name": info.get("album", ""), "artist_id": int(info.get("artist_id") or 0),
-            "artist_name": info.get("artist", ""), "year": int(info.get("year") or 0),
-            "date_modified": int(time.time())}
+    return {"id": _sql_int(info.get("_id")), "title": _sql_str(info.get("title")),
+            "duration": _sql_int(info.get("duration")), "data": _sql_str(info.get("_data")),
+            "album_id": _sql_int(info.get("album_id")), "album_name": _sql_str(info.get("album")),
+            "artist_id": _sql_int(info.get("artist_id")), "artist_name": _sql_str(info.get("artist")),
+            "year": _sql_int(info.get("year")), "date_modified": int(time.time())}
 
 
 def retro_playlist(env, task, spec):
@@ -561,7 +638,8 @@ def retro_playlist(env, task, spec):
             insert_row(conn, "SongEntity", {**_song_values(info), "playlist_creator_id": pid})
     if spec["name"] == "RetroSavePlaylist":
         m3u = "#EXTM3U\n" + "".join(
-            f"#EXTINF:{int(i['duration'] or 0) // 1000},{i['title']}\n{i['_data']}\n" for i in infos
+            f"#EXTINF:{_sql_int(i.get('duration')) // 1000},{_sql_str(i.get('title'))}\n{_sql_str(i.get('_data'))}\n"
+            for i in infos
         )
         d.write_text(f"{DOWNLOAD}/{p['playlist_name']}.m3u", m3u)
 
@@ -571,6 +649,19 @@ def retro_queue(env, task, spec):
 
     d = _dev(env)
     infos = _media_info(d, [f.split(".")[0] for f in task.params["files"]])
+    if d.sh(f"test -f {shlex.quote(rm._PLAYBACK_DB_PATH)} && echo OK || echo MISSING").strip() == "MISSING":
+        with tempfile.TemporaryDirectory() as tmp:
+            local = os.path.join(tmp, os.path.basename(rm._PLAYBACK_DB_PATH))
+            conn = sqlite3.connect(local)
+            conn.execute(
+                "CREATE TABLE playing_queue ("
+                "_id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, "
+                "id INTEGER NOT NULL, title TEXT NOT NULL, "
+                "duration INTEGER NOT NULL, data TEXT NOT NULL)"
+            )
+            conn.commit()
+            conn.close()
+            d.write_bytes(rm._PLAYBACK_DB_PATH, Path(local).read_bytes())
     with d.edit_db(rm._PLAYBACK_DB_PATH, rm._APP_NAME) as conn:
         conn.execute("DELETE FROM playing_queue")
         for info in infos:
@@ -591,12 +682,12 @@ def vlc_playlists(env, task, spec):
         for name, files in specs:
             pid = insert_row(conn, "Playlist", {"name": name, "creation_date": int(time.time())})
             for pos, fn in enumerate(files):
+                mrl = f"file:///storage/emulated/0/VLCVideos/{fn}"
                 row = conn.execute("SELECT id_media FROM Media WHERE filename=?", (fn,)).fetchone()
                 mid = row[0] if row else insert_row(
-                    conn, "Media", {"filename": fn, "title": fn, "type": 1})
+                    conn, "Media", {"filename": fn, "title": fn, "type": 1, "mrl": mrl})
                 insert_row(conn, "PlaylistMediaRelation",
-                           {"media_id": mid, "playlist_id": pid, "position": pos,
-                            "mrl": f"file:///storage/emulated/0/VLCVideos/{fn}"})
+                           {"media_id": mid, "playlist_id": pid, "position": pos, "mrl": mrl})
 
 
 # --------------------------------------------------------------------------- OsmAnd
@@ -668,8 +759,8 @@ def audio_record(env, task, spec):
 
 def gallery_copy(env, task, spec):
     d, f = _dev(env), task.params["file_name"]
-    d.sh("mkdir", "-p", DOWNLOAD)
-    d.sh("cp", f"/sdcard/DCIM/{f}", f"{DOWNLOAD}/{f}")
+    d.sh("mkdir", "-p", shlex.quote(DOWNLOAD))
+    d.sh("cp", shlex.quote(f"/sdcard/DCIM/{f}"), shlex.quote(f"{DOWNLOAD}/{f}"))
 
 
 def draw_create(env, task, spec):

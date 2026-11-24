@@ -10,13 +10,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Android SDK + Pixel 6 / API 33 (google_apis, x86_64) AVD, as in AndroidWorld's Dockerfile.
+ENV ANDROID_HOME=/opt/android
 ENV ANDROID_SDK_ROOT=/opt/android
-ENV PATH="$PATH:/opt/android/cmdline-tools/tools/bin:/opt/android/emulator:/opt/android/platform-tools"
+ENV PATH="$PATH:${ANDROID_HOME}/cmdline-tools/tools/bin:${ANDROID_HOME}/emulator:${ANDROID_HOME}/platform-tools:${ANDROID_HOME}/build-tools/33.0.0"
 ENV EMULATOR_NAME=AndroidWorldAvd
 RUN wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -P /tmp \
-    && unzip -q -d /opt/android /tmp/commandlinetools-linux-11076708_latest.zip \
-    && mkdir -p /opt/android/cmdline-tools/tools \
-    && cd /opt/android/cmdline-tools && mv NOTICE.txt source.properties bin lib tools/ \
+    && unzip -q -d "${ANDROID_HOME}" /tmp/commandlinetools-linux-11076708_latest.zip \
+    && mkdir -p "${ANDROID_HOME}/cmdline-tools/tools" \
+    && cd "${ANDROID_HOME}/cmdline-tools" && mv NOTICE.txt source.properties bin lib tools/ \
     && rm /tmp/*.zip
 RUN yes | sdkmanager --licenses >/dev/null \
     && sdkmanager --no_https "system-images;android-33;google_apis;x86_64" "platforms;android-33" \

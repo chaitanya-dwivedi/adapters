@@ -32,7 +32,8 @@ _SPEC: dict[str, Any] = {}
 
 
 def _resolve_adb_path() -> str:
-    return shutil.which("adb") or "/opt/android/platform-tools/adb"
+    sdk_root = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT") or "/opt/android"
+    return shutil.which("adb") or os.path.join(sdk_root, "platform-tools", "adb")
 
 
 def _load_task_spec() -> dict[str, Any]:

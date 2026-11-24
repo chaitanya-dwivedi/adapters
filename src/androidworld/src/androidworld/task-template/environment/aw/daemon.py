@@ -10,6 +10,7 @@ must happen in the same process). Endpoints (localhost:5000):
 """
 import base64
 import json
+import os
 import pickle
 import shutil
 import sys
@@ -40,7 +41,8 @@ def _init():
         from android_world.env import env_launcher
 
         first = not APPS_MARKER.exists()
-        adb_path = shutil.which("adb") or "/opt/android/platform-tools/adb"
+        sdk_root = os.environ.get("ANDROID_HOME") or os.environ.get("ANDROID_SDK_ROOT") or "/opt/android"
+        adb_path = shutil.which("adb") or os.path.join(sdk_root, "platform-tools", "adb")
         env = env_launcher.load_and_setup_env(
             console_port=5554,
             emulator_setup=first,
@@ -69,7 +71,8 @@ def _score():
 
 
 def _oracle():
-    sys.path.insert(0, "/opt/aw")
+    if "/opt/aw" not in sys.path:
+        sys.path.insert(0, "/opt/aw")
     import oracles
 
     return oracles.run(STATE["env"], STATE["task"], SPEC)
