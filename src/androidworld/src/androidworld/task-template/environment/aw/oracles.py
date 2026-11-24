@@ -394,6 +394,20 @@ def _send_sms(env, number, message):
     from android_world.env import adb_utils, tools
 
     d = _dev(env)
+    clean_num = re.sub(r"[-\s]", "", number)
+
+    def _sent_count() -> int:
+        raw = d.sh("content", "query", "--uri", "content://sms/sent", "--projection", "address:body")
+        rows = parse_content_rows(raw, ["address", "body"])
+        return sum(
+            1
+            for r in rows
+            if re.sub(r"[-\s]", "", r.get("address", "")) == clean_num and r.get("body") == message
+        )
+
+    before_count = _sent_count()
+    adb_utils.close_app("simple sms messenger", env.controller)
+    time.sleep(0.5)
     if any(ch in message for ch in ('"', "$", "`", "\\")):
         safe_msg = message.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
         adb_utils.send_android_intent(
@@ -410,11 +424,8 @@ def _send_sms(env, number, message):
     else:
         tools.AndroidToolController(env.controller).send_sms(number, message)
 
-    clean_num = re.sub(r"[-\s]", "", number)
-    for _ in range(10):
-        raw = d.sh("content", "query", "--uri", "content://sms/sent", "--projection", "address:body")
-        rows = parse_content_rows(raw, ["address", "body"])
-        if any(re.sub(r"[-\s]", "", r.get("address", "")) == clean_num and r.get("body") == message for r in rows):
+    for _ in range(15):
+        if _sent_count() > before_count:
             break
         time.sleep(1.5)
     adb_utils.launch_app("simple sms messenger", env.controller)  # checker wants this app in front
@@ -486,6 +497,14 @@ def clock_timer_entry(env, task, spec):
 
 
 # --------------------------------------------------------------------------- browser (CDP)
+def _free_port() -> int:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 def _cdp_session(port=9222, timeout=60):
     import urllib.request
 
@@ -542,9 +561,10 @@ def _open_task_html_in_chrome(d: Dev):
 def _browser(env, body):
     d = _dev(env)
     srv, web = _open_task_html_in_chrome(d)
+    cdp_port = _free_port()
     ws = None
     try:
-        ws = _cdp_session(port=9222)
+        ws = _cdp_session(port=cdp_port)
         body(ws)
         time.sleep(2)
     finally:
@@ -553,7 +573,7 @@ def _browser(env, body):
                 ws.close()
             except Exception:  # noqa: BLE001
                 pass
-        subprocess.run(["adb", "forward", "--remove", "tcp:9222"], check=False)
+        subprocess.run(["adb", "forward", "--remove", f"tcp:{cdp_port}"], check=False)
         srv.shutdown()
         srv.server_close()
         shutil.rmtree(web, ignore_errors=True)
@@ -696,7 +716,10 @@ def osmand_favorite(env, task, spec):
 
     d, loc = _dev(env), task.params["location"]
     lat, lon = osmand._lookup_location_coords(loc)
-    cur = d.cat(osmand._FAVORITES_PATH)
+    try:
+        cur = d.cat(osmand._FAVORITES_PATH)
+    except Exception:  # noqa: BLE001
+        cur = None
     d.write_text(osmand._FAVORITES_PATH, add_gpx_waypoint(cur, lat, lon, loc))
 
 

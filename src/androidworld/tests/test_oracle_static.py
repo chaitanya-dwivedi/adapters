@@ -229,6 +229,9 @@ def test_boot_sh_syntax_and_hardening_guards() -> None:
     assert 'if [ "$booted" != "1" ]' in text
     assert "ANDROID_I_WANT_MY_TCG=yes" in text
     assert "-no-metrics" in text
+    assert "package_verifier_enable 0" in text
+    assert "verifier_verify_adb_installs 0" in text
+    assert "GRPC_VERBOSITY=ERROR" in text
 
 
 def test_boot_sh_executes_wait_for_device_after_adb_root_with_mock_binaries(tmp_path: Path) -> None:
@@ -316,6 +319,9 @@ def test_dockerfile_defines_android_home_and_sdk_root() -> None:
     assert "${ANDROID_HOME}/emulator" in text
     assert "Pillow==" in text
     assert "websocket-client==" in text
+    assert "hw.keyboard = yes" in text
+    assert "GRPC_VERBOSITY=ERROR" in text
+    assert "GRPC_ENABLE_FORK_SUPPORT=0" in text
 
 
 def test_client_py_handles_non_json_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -834,8 +840,13 @@ def test_browser_oracles_use_ephemeral_port_and_cleanup(monkeypatch: pytest.Monk
         def close(self) -> None:
             self.closed = True
 
+    cdp_ports_used: list[int] = []
     fake_ws = _FakeWS()
-    monkeypatch.setattr(oracles, "_cdp_session", lambda port=9222, timeout=60: fake_ws)
+    monkeypatch.setattr(
+        oracles,
+        "_cdp_session",
+        lambda port=9222, timeout=60: (cdp_ports_used.append(port), fake_ws)[1],
+    )
 
     env = SimpleNamespace(controller=SimpleNamespace())
     oracles.browser_draw(env, SimpleNamespace(params={}), {"name": "BrowserDraw"})
@@ -845,8 +856,84 @@ def test_browser_oracles_use_ephemeral_port_and_cleanup(monkeypatch: pytest.Monk
     assert len(seen_urls) == 3
     # Ephemeral port must NOT be hardcoded 8123 unless OS happened to assign it (check valid 10.0.2.2:<port>)
     assert all(re.match(r"^http://10\.0\.2\.2:\d+/task\.html$", u) for u in seen_urls)
+    assert len(cdp_ports_used) == 3
+    assert all(isinstance(p, int) and p > 0 and p != 9222 for p in cdp_ports_used)
+    for p in cdp_ports_used:
+        assert ["adb", "forward", "--remove", f"tcp:{p}"] in adb_fwds
     assert any("ctx.fillRect" in e for e in eval_exprs)
     assert any("checkAnswer()" in e for e in eval_exprs)
     assert any("moveCharacter('down')" in e for e in eval_exprs)
     assert fake_ws.closed is True
-    assert adb_fwds.count(["adb", "forward", "--remove", "tcp:9222"]) == 3
+
+
+def test_osmand_favorite_tolerates_missing_favorites_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_upstream_stubs(monkeypatch)
+    _load_ref_module("android_world.task_evals.task_eval", "android_world/task_evals/task_eval.py", monkeypatch)
+    _load_ref_module("android_world.task_evals.utils.sqlite_schema_utils", "android_world/task_evals/utils/sqlite_schema_utils.py", monkeypatch)
+    _load_ref_module("android_world.task_evals.utils.sqlite_utils", "android_world/task_evals/utils/sqlite_utils.py", monkeypatch)
+    _load_ref_module("android_world.task_evals.common_validators.sqlite_validators", "android_world/task_evals/common_validators/sqlite_validators.py", monkeypatch)
+    osmand = _load_ref_module("android_world.task_evals.single.osmand", "android_world/task_evals/single/osmand.py", monkeypatch)
+
+    tasks = json.loads(TASKS_JSON.read_text(encoding="utf-8"))
+    fav = next(t for t in tasks if t["name"] == "OsmAndFavorite")
+    fav_params = pickle.loads(base64.b64decode(fav["params_pickle_b64"]))
+
+    written: dict[str, str] = {}
+
+    def _fail_cat(self, path: str) -> str:
+        raise RuntimeError(f"cat: {path}: No such file or directory")
+
+    monkeypatch.setattr(oracles.Dev, "cat", _fail_cat)
+    monkeypatch.setattr(oracles.Dev, "write_text", lambda self, remote, txt: written.__setitem__(remote, txt))
+
+    fake_env = SimpleNamespace(controller=SimpleNamespace())
+    oracles.osmand_favorite(fake_env, SimpleNamespace(params=fav_params), {"name": "OsmAndFavorite"})
+    fav_xml = ET.fromstring(written[osmand._FAVORITES_PATH])
+    assert osmand._favorites_contains(fav_xml, fav_params["location"])
+
+
+def test_send_sms_resend_waits_for_count_increment(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_upstream_stubs(monkeypatch)
+    sleeps: list[float] = []
+    monkeypatch.setattr(oracles.time, "sleep", lambda s: sleeps.append(s))
+
+    adb_mod = _load_ref_module("android_world.env.adb_utils", "android_world/env/adb_utils.py", monkeypatch)
+    _load_ref_module("android_world.utils.contacts_utils", "android_world/utils/contacts_utils.py", monkeypatch)
+    _load_ref_module("android_world.env.actuation", "android_world/env/actuation.py", monkeypatch)
+    _load_ref_module("android_world.env.android_world_controller", "android_world/env/android_world_controller.py", monkeypatch)
+    tools_mod = _load_ref_module("android_world.env.tools", "android_world/env/tools.py", monkeypatch)
+
+    monkeypatch.setattr(adb_mod, "launch_app", lambda *a, **k: None)
+    closed: list[str] = []
+    monkeypatch.setattr(adb_mod, "close_app", lambda name, ctrl: closed.append(name))
+
+    rows_state = {"sent": 1, "post_polls": 0}
+
+    class _FakeTools:
+        def __init__(self, ctrl):
+            self.ctrl = ctrl
+
+        def send_sms(self, number, message):
+            assert closed == ["simple sms messenger"]
+            rows_state["sent_called"] = True
+
+    monkeypatch.setattr(tools_mod, "AndroidToolController", _FakeTools)
+
+    def _fake_query(args, ctrl, timeout_sec=None):
+        if len(args) >= 2 and args[:2] == ["shell", "content"]:
+            if rows_state.get("sent_called"):
+                rows_state["post_polls"] += 1
+                if rows_state["post_polls"] >= 2:
+                    rows_state["sent"] = 2
+            lines = "".join(
+                f"Row: {i} address=+17620559636, body=Inconceivable!\n"
+                for i in range(rows_state["sent"])
+            )
+            return SimpleNamespace(status=0, generic=SimpleNamespace(output=lines.encode()))
+        return SimpleNamespace(status=0, generic=SimpleNamespace(output=b""))
+
+    monkeypatch.setattr(adb_mod, "issue_generic_request", _fake_query)
+
+    oracles._send_sms(SimpleNamespace(controller=SimpleNamespace()), "+17620559636", "Inconceivable!")
+    assert rows_state["post_polls"] == 2
+    assert sleeps.count(1.5) == 1

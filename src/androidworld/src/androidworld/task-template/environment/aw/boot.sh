@@ -59,8 +59,10 @@ exec 9>/tmp/aw_boot.lock; flock -n 9 || exit 0
 
   adb shell input keyevent 82 >> /logs/aw/boot.log 2>&1 || true
   adb shell "settings put global window_animation_scale 0.0; settings put global transition_animation_scale 0.0; settings put global animator_duration_scale 0.0" >> /logs/aw/boot.log 2>&1 || true
+  adb shell "settings put global package_verifier_enable 0; settings put global verifier_verify_adb_installs 0" >> /logs/aw/boot.log 2>&1 || true
   adb shell "settings put global hidden_api_policy_pre_p_apps 1; settings put global hidden_api_policy_p_apps 1; settings put global hidden_api_policy 1" >> /logs/aw/boot.log 2>&1 || true
 
+  export GRPC_VERBOSITY=ERROR GRPC_ENABLE_FORK_SUPPORT=0 GLOG_minloglevel=2
   nohup python3 /opt/aw/daemon.py > /logs/aw/daemon.log 2>&1 &
   log "launched /opt/aw/daemon.py"
 ) 9>&-
