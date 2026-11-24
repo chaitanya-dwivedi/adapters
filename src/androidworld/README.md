@@ -1,6 +1,6 @@
 ## AndroidWorld → Harbor Adapter
 
-> **Status: WIP.** Task generation and oracles exist for all 116 tasks; the emulator-dependent oracle run has NOT been executed yet (requires a Linux x86_64 host with KVM, e.g. Daytona if nested virtualization is supported). No parity experiments have been run.
+> **Status: Oracle-verified (`116/116`), Parity Pending.** All **116/116** deterministic oracles are verified live on a Pixel 6 / Android 13 (API 33) emulator (`arm64-v8a` native HVF), and **39/39** offline unit/parity tests pass. Harbor `linux/amd64` container parity experiments are pending Harbor team sign-off and a KVM-enabled `x86_64` Linux host.
 
 ## Overview
 
@@ -33,7 +33,7 @@ Upstream ships **no oracle/reference solutions**. This adapter provides a determ
 | `injection` | 76 | end state written directly (adb settings/files, app SQLite DBs, GPX files, generated media files), i.e. the result of the UI work with the UI bypassed, using the same seed-fixed params |
 | `ui-script` | 15 | deterministic scripted UI/automation: clock, contacts, SMS (upstream helpers), browser games (Chrome DevTools), Markor+SMS |
 
-Per-task method/verification table and fidelity caveats: see `NOTES.md` in the workspace notes (to be moved into this README once oracle runs are done). Offline verification (`tests/offline_harness.py`, run inside the task image): 68 state-based tasks pass the REAL upstream `initialize_task -> oracle -> is_successful` loop on a fake device, and all 25 IR answers are accepted by upstream's checker. Browser, clock, contacts, SMS and OpenApp oracles can only be verified on an emulator.
+Live emulator verification on Pixel 6 / API 33 (`arm64-v8a` HVF): **116/116** tasks pass the real upstream `initialize_task -> oracle -> is_successful == 1.0` loop (`114/116` in the full sequential sweep + `2/2` VLC tasks under both `--setup` and `--no-setup`). Offline verification (`tests/offline_harness.py` + `tests/test_oracle_static.py`): `68` state tasks pass on a fake device, `25/25` IR answers are accepted, and all `116/116` oracle handlers and `T3AAgent` prompts/actions are unit-tested (**39/39** pytest).
 
 ## Generated Task Structure
 
@@ -43,7 +43,8 @@ androidworld/
 │   ├── task.toml                 # name = google-research/androidworld__{task_id}
 │   ├── instruction.md            # goal + adb how-to (+ answer-file note for QA tasks)
 │   ├── environment/
-│   │   ├── Dockerfile            # linux/amd64, Android SDK + AVD + android_world
+│   │   ├── Dockerfile            # linux/amd64, Android SDK + AVD (hw.keyboard=yes) + android_world
+│   │   ├── docker-compose.yaml   # mounts /dev/kvm and exposes /ready healthcheck
 │   │   ├── task_spec.json        # class name, seed, pickled params, oracle kind
 │   │   └── aw/                   # daemon.py, client.py, oracles.py, boot.sh, entrypoint.sh
 │   ├── solution/solve.sh         # oracle (calls daemon /oracle)
@@ -53,18 +54,18 @@ androidworld/
 ## Installation / Prerequisites
 
 - Generation: `uv` + Python 3.12 only.
-- Running: **Linux x86_64 host with KVM** (Docker with `/dev/kvm`, or a Daytona sandbox with nested virtualization). Apple-silicon/arm64 hosts and hosts without KVM cannot run the emulator at usable speed. Preflight: `scripts/check_emulator_host.sh [task-dir]`.
+- Running Harbor `linux/amd64` containers: **Linux `x86_64` host with `/dev/kvm`** (Docker via `environment/docker-compose.yaml`). Note that Daytona Firecracker microVMs lack `/dev/kvm` and cap disk at 10 GB, and hosts without KVM cannot run the `x86_64` emulator at usable speed. Preflight: `scripts/check_emulator_host.sh [task-dir]`.
 - Resources per task: ~4 CPU, 8 GB RAM, 30 GB disk. First boot installs the benchmark apps (downloads APKs) and is slow.
 - `harbor lint` reports `shared-verifier` for every task. This is intentional: the verifier must query the live emulator in the agent's container, so a separate verifier environment is impossible.
 
 ## Run Evaluation / Harness
 
 ```bash
-# Oracle on the full set (needs KVM host / Daytona)
+# Oracle on the full set (needs Linux x86_64 host with /dev/kvm)
 cd src/androidworld
 uv run androidworld --output-dir ../../datasets/androidworld --overwrite
 cd ../..
-harbor run -p datasets/androidworld -a oracle        # add the Daytona environment option as needed
+harbor run -p datasets/androidworld -a oracle
 
 # Single task
 harbor trial start -p datasets/androidworld/system-wifi-turn-on -a oracle
@@ -105,7 +106,8 @@ harbor run -p datasets/androidworld-parity --agent-import-path androidworld.agen
 
 ## Notes & Caveats
 
-- Untested here: emulator boot, the daemon, and browser/clock/contacts/SMS/OpenApp oracles have not been run against a live emulator (arm64 host, no KVM). Done offline: generation, `harbor lint`, image build (amd64 under qemu), and the fake-device oracle harness.
+- **Verified live vs. containerized parity**: All **116/116** deterministic oracles have been verified live on Pixel 6 API-33 (`arm64-v8a` HVF), and **39/39** unit/parity tests plus `harbor lint --ignore shared-verifier` pass. Running full Harbor `linux/amd64` container parity still requires a Linux `x86_64` host with `/dev/kvm` (Daytona Firecracker microVMs lack `/dev/kvm` and cap disk at 10 GB).
+- **Container & AVD hardening**: `Dockerfile` sets `hw.keyboard = yes` in AVD `config.ini` (required for `monkey` during upstream `setup_apps`) and `ENV GRPC_VERBOSITY=ERROR GRPC_ENABLE_FORK_SUPPORT=0 GLOG_minloglevel=2` (prevents `grpcio` fork warnings from corrupting `adb_controller` `stdout`); `boot.sh` exports the same env vars and disables Play Protect adb verification (`package_verifier_enable 0`, `verifier_verify_adb_installs 0`).
 - `RecipeDeleteMultipleRecipesWithConstraint`: upstream's seed-index-0 instance is degenerate (nothing to delete), so the exporter uses seed index 1.
 - Information-retrieval answers are comma-split by upstream's checker, so ground-truth strings that contain commas may not be satisfiable by anyone (including this oracle).
 - Date/time is frozen to Oct 2023 by upstream setup; tasks derived from "now" at export time (e.g. `MarkorCreateFolder` folder name) are frozen in `tasks.json`.
