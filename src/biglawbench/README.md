@@ -2,21 +2,30 @@
 
 ## Overview
 
-BigLaw Bench (BLB) by Harvey evaluates LLMs/agents on real-world legal work product (transactional and litigation tasks drawn from billable-time entries), graded with per-task rubrics. This adapter covers **BLB-Core public sample: 6 tasks** (ids 4, 5, 19, 49, 60, 96 in `blb-core/core-samples.csv`). Upstream: https://github.com/harveyai/biglaw-bench (pinned to commit `138fd481b459a00bbd98eeb710f69ada1052bd47`). The full BLB dataset is private to Harvey.
+BigLaw Bench (BLB) by Harvey evaluates LLMs/agents on real-world legal work product (transactional and litigation tasks drawn from billable-time entries and Share Purchase Agreements). This adapter covers **all 16 publicly adaptable tasks** from https://github.com/harveyai/biglaw-bench (pinned to commit `138fd481b459a00bbd98eeb710f69ada1052bd47`):
 
-**Excluded:** `blb-workflows/spa` (SPA deal-point extraction; no scorer or judge prompt upstream, needs a new scoring design) and `blb-retrieval` (retrieval-system benchmark with queries only, no gold labels). Out of scope for this round.
+- **BLB-Core (6 tasks):** `blb-core-004`, `blb-core-005`, `blb-core-019`, `blb-core-049`, `blb-core-060`, `blb-core-096` (from `blb-core/core-samples.csv`).
+- **BLB-Workflows SPA (10 tasks):** `blb-spa-001` through `blb-spa-010` (from `blb-workflows/spa/spa-samples.csv`, `schema.json`, and 10 SPA PDFs).
+
+**Excluded:** `blb-retrieval` (30 retrieval queries over contracts and discovery emails with no gold labels in the repository) and the private full BLB datasets.
 
 ## What is BigLawBench?
 
-"A new standard for evaluating AI on legal & professional tasks" (Harvey, 2024). Each task has a rubric of affirmative points (e.g. "Does the response state X? (1 point)") and negative points (-1 per hallucination, -0.5 per extraneous statement). Answer score = net points / total affirmative points. Harvey also describes a separate source-reliability score (not in the public rubrics). See https://www.harvey.ai/blog/introducing-biglaw-bench.
+"A new standard for evaluating AI on legal & professional tasks" (Harvey, 2024). See https://www.harvey.ai/blog/introducing-biglaw-bench.
+- **BLB-Core:** Each task has a rubric of affirmative points (`Does the response state X? (1 point)`) and negative points (`-1` per hallucination, `-0.5` per extraneous statement). Answer score = `(met points - penalties) / total affirmative points`, clamped to `[0, 1]`.
+- **BLB-Workflows SPA:** Structured deal-point extraction from Share Purchase Agreements (SPAs) into a 29-field JSON schema (`schema.json`) evaluated against human-curated ground truth in `spa-samples.csv`.
 
 ## Adapter Features
 
-- Downloads `core-samples.csv` and the task PDFs from the pinned upstream commit at generation time; **no upstream data is committed**. Generated PDFs are baked into each task's `environment/documents/`.
-- Task ids: `blb-core-004`, ... ; task names `harvey/biglawbench__blb-core-004`.
-- Verifier: stdlib-only rubric scorer `tests/judge.py` (LLM judge over any OpenAI-compatible endpoint). Judge returns per-criterion booleans and counts of hallucinations/extraneous statements; the scorer computes `clamp((sum(met points) - penalties) / total_positive_points, 0, 1)`.
-- Oracle: `solution/answer.md` is a rubric-derived reference answer (every affirmative criterion restated as a satisfied statement, generated mechanically by the adapter). It is a checklist, not a polished work product; the oracle verifies the pipeline end to end.
-- Instruction = upstream `Prompt` verbatim + attached-document list + output location (`/app/answer.md`). This is the only prompt change.
+- Downloads `core-samples.csv`, `spa-samples.csv`, `schema.json`, and all task PDFs from the pinned upstream commit at generation time; **no upstream data is committed**. Generated PDFs are baked into each task's `environment/documents/` (and `/app/schema.json` for SPA tasks).
+- Task IDs: `blb-core-004`, ..., `blb-core-096` and `blb-spa-001`, ..., `blb-spa-010`; task names `harvey/biglawbench__blb-core-XXX` and `harvey/biglawbench__blb-spa-XXX`.
+- **Separate verifier isolation:** Tasks declare `artifacts` (`/app/answer.md` or `/app/answer.json`) and `[verifier].environment_mode = "separate"`, keeping the agent and verifier phases isolated (`harbor lint` clean).
+- **Verifier (`tests/judge.py`, stdlib-only):**
+  - `--mode core`: LLM-as-judge over an OpenAI-compatible chat-completions endpoint grading affirmative rubric criteria (`true`/`false`) and negative item counts.
+  - `--mode spa`: Scores all 29 deal-point fields against `tests/ground_truth.json` using deterministic normalization (dates, currency, N/A equivalences, party `{name, entity_type, jurisdiction}` tokens, and unordered list matching) with a batched LLM-judge semantic-equivalence fallback for free-text legal clauses. Reward = `matched_fields / 29`.
+- **Oracle:**
+  - `blb-core`: Authored rubric-satisfying legal work products in `src/biglawbench/solutions/` (or `reference_answer()` fallback) copied to `/app/answer.md` by `solution/solve.sh`.
+  - `blb-spa`: Ground-truth JSON in `solution/answer.json` parsed from `spa-samples.csv` and copied to `/app/answer.json` by `solution/solve.sh`.
 
 ## Generated Task Structure
 
@@ -28,6 +37,12 @@ biglawbench/
 │   ├── environment/{Dockerfile, documents/*.pdf}
 │   ├── solution/{solve.sh, answer.md}
 │   └── tests/{test.sh, judge.py, rubric.md}
+├── blb-spa-001/
+│   ├── task.toml
+│   ├── instruction.md
+│   ├── environment/{Dockerfile, schema.json, documents/*.pdf}
+│   ├── solution/{solve.sh, answer.json}
+│   └── tests/{test.sh, judge.py, ground_truth.json}
 ```
 
 ## Run Evaluation / Harness
@@ -35,44 +50,59 @@ biglawbench/
 Judge configuration is read from the environment via `[verifier.env]`:
 
 ```bash
-export JUDGE_API_KEY=...                       # required
-export JUDGE_BASE_URL=https://app.ppapi.ai/    # optional, OpenAI-compatible endpoint (default shown)
-export JUDGE_MODEL=gpt-5-2025-08-07            # optional, default shown (configurable)
+export JUDGE_API_KEY=...                          # required for core tasks and SPA semantic fallback
+export JUDGE_BASE_URL=https://app.ppapi.ai/v1     # OpenAI-compatible endpoint (default shown)
+export JUDGE_MODEL=gpt-5-mini                     # default shown (configurable)
 
-uv run biglawbench --output-dir datasets/biglawbench
-harbor run -p datasets/biglawbench -a oracle
-harbor run -c src/biglawbench/run_biglawbench.yaml -a <agent> -m "<model>"
-harbor trial start -p datasets/biglawbench/blb-core-004
+cd src/biglawbench
+uv run biglawbench --output-dir ../../datasets/biglawbench --overwrite
+harbor run -p ../../datasets/biglawbench -a oracle -n 3
+harbor run -c run_biglawbench.yaml -a <agent> -m "<model>"
+harbor trial start -p ../../datasets/biglawbench/blb-core-004
 ```
 
 ## Usage: Create Task Directories
 
 ```bash
 cd src/biglawbench
-uv run biglawbench --output-dir ../../datasets/biglawbench
+uv run biglawbench --output-dir ../../datasets/biglawbench --split full --overwrite
 ```
 
-Flags: `--output-dir`, `--limit`, `--overwrite`, `--task-ids` (e.g. `blb-core-004` or `4`). No `--split parity` needed: only 6 tasks.
+Flags:
+- `--split {full,core,spa}`: task split to generate (default: `full` = all 16 tasks; `core` = 6 tasks; `spa` = 10 tasks)
+- `--output-dir`: directory to write generated tasks
+- `--limit`: generate only the first N tasks
+- `--overwrite`: overwrite existing task directories
+- `--task-ids`: filter by task IDs (e.g., `blb-core-004 blb-spa-001` or `4 spa-1`)
 
 ## Comparison with Original Benchmark (Parity)
 
-Not yet run (parity plan pending team approval). The upstream repo ships no harness or judge, so parity needs a Scenario-2 style reference judge.
+Not yet run (parity plan pending team approval). Because the upstream repo ships no agent harness or scorer, a local Scenario 2 original-side parity runner (`parity_runner.py`) is prepared in the local `biglaw-bench` clone using identical prompts, pinned CLI agent invocations (`codex` / `claude-code`), and symmetric scoring.
 
 | Agent | Model | Metric | Number of Runs | Dataset Size | Original Benchmark Performance | Harbor Adapter Performance |
 |-------|-------|--------|------------------|--------------|------------------------------|----------------------------|
-| TBD | TBD | Rubric answer score | TBD | 6 | TBD | TBD |
+| TBD | TBD | Mean task score (rubric / 29-field SPA) | TBD | 16 | TBD | TBD |
+
+```bash
+# Original-side Scenario 2 parity runner (local clone)
+python3 parity_runner.py --split full --dry-run
+python3 parity_runner.py --split full --agent codex --model gpt-5-mini --runs 3
+
+# Harbor-side parity run
+harbor run -p datasets/biglawbench -a codex -m gpt-5-mini
+```
 
 ## Notes & Caveats
 
-- Upstream has no LICENSE file and publishes only samples; PDFs are fetched, not redistributed. Confirm terms with Harvey before publishing generated datasets.
-- No judge prompt/model is specified upstream; ours is a new judge (per-criterion true/false + error counts). Scores are judge-dependent and not exactly comparable to Harvey's internal numbers. The source-reliability score is not implemented.
-- Tasks 49 and 96 have no attached documents (hallucination counts are judged without source access to the task's context beyond the prompt).
-- Oracle needs a live judge key; it is a rubric checklist, so the pass depends on the judge accepting it.
-- Rubric labels are parsed by regex; "Style: N/A" sections are simply absent.
+- Upstream has no `LICENSE` file and publishes only samples; PDFs/CSVs/schema are fetched at generation time and never committed. Confirm terms with Harvey before publishing generated datasets.
+- Upstream provides no judge prompt, judge model, or SPA scoring script; both `core` and `spa` verifiers are Harbor adapter implementations and should be documented as benchmark additions.
+- Endpoint note: `https://app.ppapi.ai/v1` with `gpt-5-mini` is used as the default verified judge endpoint/model (`gpt-5-2025-08-07` and `claude-sonnet-4-5-20250929` returned HTTP 503 `model_not_found` on `app.ppapi.ai/v1`, and `app-us.ppapi.ai/v1` returned HTTP 401 `Invalid token` during verification).
+- Tasks `blb-core-049` and `blb-core-096` have no attached documents.
+- In `blb-workflows/spa/spa-samples.csv`, `Conditions Precedent to Closing Transaction` combines Mutual/Buyer/Seller sections into one column while `schema.json` separates `conditions_to_sellers_obligations` and `conditions_to_buyers_obligations`; the adapter splits the column deterministically into those two arrays so all 29 deal-point fields align with `schema.json`.
 
 ## Installation / Prerequisites
 
-- Docker, Harbor (`uv tool install harbor`), `uv sync` in this directory, network access to GitHub raw at generation time, a judge API key.
+- Docker Desktop, Harbor (`uv tool install harbor`), `uv sync` in `src/biglawbench`, network access to GitHub raw at generation time, and a `JUDGE_API_KEY`.
 
 ## Troubleshooting
 

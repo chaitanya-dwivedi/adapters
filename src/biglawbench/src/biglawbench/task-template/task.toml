@@ -1,8 +1,9 @@
 version = "1.0"
+artifacts = ["{artifact_path}"]
 
 [task]
 name = "harvey/biglawbench__{task_id}"
-description = "BigLaw Bench Core task {number}: {task_summary}"
+description = "{description}"
 authors = [
     { name = "Julio Pereyra" },
     { name = "Elizabeth Lebens" },
@@ -23,7 +24,7 @@ authors = [
     { name = "Aatish Nayak" },
     { name = "Gabriel Pereyra" },
 ]
-keywords = ["legal", "biglaw", "rubric", "llm-judge", "{category_kw}", "{task_type_kw}"]
+keywords = ["legal", "biglaw", "{tag1}", "{tag2}", "{category_kw}", "{task_type_kw}"]
 
 [metadata]
 difficulty = "hard"
@@ -33,12 +34,13 @@ upstream_task_type = "{task_type}"
 
 [verifier]
 timeout_sec = 900.0
+environment_mode = "separate"
 
 # LLM judge: any OpenAI-compatible chat-completions endpoint.
 [verifier.env]
 JUDGE_API_KEY = "${JUDGE_API_KEY}"
-JUDGE_BASE_URL = "${JUDGE_BASE_URL:-https://app.ppapi.ai/}"
-JUDGE_MODEL = "${JUDGE_MODEL:-gpt-5-2025-08-07}"
+JUDGE_BASE_URL = "${JUDGE_BASE_URL:-https://app.ppapi.ai/v1}"
+JUDGE_MODEL = "${JUDGE_MODEL:-gpt-5-mini}"
 
 [agent]
 timeout_sec = 1800.0
