@@ -227,6 +227,8 @@ def test_boot_sh_syntax_and_hardening_guards() -> None:
     assert text.index("adb root") < text.index("adb wait-for-device")
     assert text.index("adb wait-for-device") < text.index("settings put global")
     assert 'if [ "$booted" != "1" ]' in text
+    assert "ANDROID_I_WANT_MY_TCG=yes" in text
+    assert "-no-metrics" in text
 
 
 def test_boot_sh_executes_wait_for_device_after_adb_root_with_mock_binaries(tmp_path: Path) -> None:

@@ -21,6 +21,7 @@ exec 9>/tmp/aw_boot.lock; flock -n 9 || exit 0
 
   ACCEL="-accel on"
   if [ ! -e /dev/kvm ]; then
+    export ANDROID_I_WANT_MY_TCG=yes
     ACCEL="-accel off -qemu -accel tcg,thread=multi"
   fi
   log "starting boot (emulator=$EMULATOR_NAME accel='$ACCEL')"
@@ -32,7 +33,7 @@ exec 9>/tmp/aw_boot.lock; flock -n 9 || exit 0
     adb -s "$serial" emu kill >/dev/null 2>&1 || true
   done
 
-  nohup emulator @"${EMULATOR_NAME}" -no-window -no-snapshot -no-boot-anim -noaudio \
+  nohup emulator @"${EMULATOR_NAME}" -no-window -no-snapshot -no-boot-anim -noaudio -no-metrics \
       -memory 4096 $ACCEL -gpu swiftshader_indirect -grpc 8554 > /logs/aw/emulator.log 2>&1 &
 
   booted=0
