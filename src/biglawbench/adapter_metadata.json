@@ -16,13 +16,13 @@
       {
         "split": "full",
         "adapted_benchmark_size": 16,
-        "parity_benchmark_size": null,
-        "parity_sampling_rate": null,
-        "registry_benchmark_size": null,
+        "parity_benchmark_size": 16,
+        "parity_sampling_rate": 1.0,
+        "registry_benchmark_size": 16,
         "added_agents": [],
-        "parity_matching_agents": [],
+        "parity_matching_agents": ["codex@0.159.1+openai/gpt-5.4"],
         "parity_unmatching_agents": null,
-        "parity_costs": null,
+        "parity_costs": "$30",
         "notes": "Covers all 16 publicly adaptable tasks (6 blb-core + 10 blb-workflows/spa); blb-retrieval (queries only, no gold labels) excluded."
       }
     ]

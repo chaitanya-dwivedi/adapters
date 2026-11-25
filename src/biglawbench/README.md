@@ -77,26 +77,30 @@ Flags:
 
 ## Comparison with Original Benchmark (Parity)
 
-Not yet run (parity plan pending team approval). Because the upstream repo ships no agent harness or scorer, a local Scenario 2 original-side parity runner (`parity_runner.py`) is prepared in the local `biglaw-bench` clone using identical prompts, pinned CLI agent invocations (`codex` / `claude-code`), and symmetric scoring.
+Symmetric Scenario 2 parity passed across **3 full 16-task runs** per side (`96` total trials, `0` errors) using `codex@0.159.1` with `openai/gpt-5.4` (`reasoning_effort=low`) and `JUDGE_MODEL=gpt-5.4`:
+- **Original runs (`parity_runner.py`):** `[0.6153, 0.5854, 0.6042]` → **`0.6016 ± 0.0087`**
+- **Harbor runs (`harbor run`):** `[0.6062, 0.6154, 0.6637]` → **`0.6284 ± 0.0178`** (`$14.78` Harbor-side agent cost; run-score ranges `[0.5854, 0.6153]` vs `[0.6062, 0.6637]` overlap cleanly per `ADP-PARITY`).
 
 | Agent | Model | Metric | Number of Runs | Dataset Size | Original Benchmark Performance | Harbor Adapter Performance |
 |-------|-------|--------|------------------|--------------|------------------------------|----------------------------|
-| TBD | TBD | Mean task score (rubric / 29-field SPA) | TBD | 16 | TBD | TBD |
+| `codex@0.159.1` | `openai/gpt-5.4` | Mean task score | 3 | 16 (100%) | `0.6016 ± 0.0087` | `0.6284 ± 0.0178` |
 
 ```bash
 # Original-side Scenario 2 parity runner (local clone)
-python3 parity_runner.py --split full --dry-run
-python3 parity_runner.py --split full --agent codex --model gpt-5-mini --runs 3
+JUDGE_MODEL=gpt-5.4 python3 parity_runner.py \
+  --split full --agent codex --model openai/gpt-5.4 --reasoning-effort low \
+  --concurrency 2 --runs 1 --output-dir parity_results/full_codex_gpt54_run1
 
 # Harbor-side parity run
-harbor run -p datasets/biglawbench -a codex -m gpt-5-mini
+JUDGE_MODEL=gpt-5.4 harbor run -y -p datasets/biglawbench \
+  -a codex -m openai/gpt-5.4 --ak version=0.159.1 --ak reasoning_effort=low -n 2
 ```
 
 ## Notes & Caveats
 
 - Upstream has no `LICENSE` file and publishes only samples; PDFs/CSVs/schema are fetched at generation time and never committed. Confirm terms with Harvey before publishing generated datasets.
 - Upstream provides no judge prompt, judge model, or SPA scoring script; both `core` and `spa` verifiers are Harbor adapter implementations and should be documented as benchmark additions.
-- Endpoint note: `https://app.ppapi.ai/v1` with `gpt-5-mini` is used as the default verified judge endpoint/model (`gpt-5-2025-08-07` and `claude-sonnet-4-5-20250929` returned HTTP 503 `model_not_found` on `app.ppapi.ai/v1`, and `app-us.ppapi.ai/v1` returned HTTP 401 `Invalid token` during verification).
+- Endpoint note: `https://app.ppapi.ai/v1` with `gpt-5-mini` is used as the default judge endpoint/model for oracle smoke runs, while `JUDGE_MODEL=gpt-5.4` was used for the 3-run parity experiment (`gpt-5-2025-08-07` and `claude-sonnet-4-5-20250929` returned HTTP 503 `model_not_found` on `app.ppapi.ai/v1`, and `app-us.ppapi.ai/v1` returned HTTP 401 `Invalid token` during verification). `judge.py` and `parity_runner.py` retry judge calls up to 16 times to absorb transient HTTP 403/5xx gateway errors.
 - Tasks `blb-core-049` and `blb-core-096` have no attached documents.
 - In `blb-workflows/spa/spa-samples.csv`, `Conditions Precedent to Closing Transaction` combines Mutual/Buyer/Seller sections into one column while `schema.json` separates `conditions_to_sellers_obligations` and `conditions_to_buyers_obligations`; the adapter splits the column deterministically into those two arrays so all 29 deal-point fields align with `schema.json`.
 
