@@ -51,7 +51,7 @@ Judge configuration is read from the environment via `[verifier.env]`:
 
 ```bash
 export JUDGE_API_KEY=...                          # required for core tasks and SPA semantic fallback
-export JUDGE_BASE_URL=https://app.ppapi.ai/v1     # OpenAI-compatible endpoint (default shown)
+export JUDGE_BASE_URL=https://api.openai.com/v1    # OpenAI-compatible endpoint (default shown)
 export JUDGE_MODEL=gpt-5-mini                     # default shown (configurable)
 
 cd src/biglawbench
@@ -100,7 +100,7 @@ JUDGE_MODEL=gpt-5.4 harbor run -y -p datasets/biglawbench \
 
 - Upstream has no `LICENSE` file and publishes only samples; PDFs/CSVs/schema are fetched at generation time and never committed. Confirm terms with Harvey before publishing generated datasets.
 - Upstream provides no judge prompt, judge model, or SPA scoring script; both `core` and `spa` verifiers are Harbor adapter implementations and should be documented as benchmark additions.
-- Endpoint note: `https://app.ppapi.ai/v1` with `gpt-5-mini` is used as the default judge endpoint/model for oracle smoke runs, while `JUDGE_MODEL=gpt-5.4` was used for the 3-run parity experiment (`gpt-5-2025-08-07` and `claude-sonnet-4-5-20250929` returned HTTP 503 `model_not_found` on `app.ppapi.ai/v1`, and `app-us.ppapi.ai/v1` returned HTTP 401 `Invalid token` during verification). `judge.py` and `parity_runner.py` retry judge calls up to 16 times to absorb transient HTTP 403/5xx gateway errors.
+- Endpoint note: `https://api.openai.com/v1` with `gpt-5-mini` is the default judge endpoint/model (override `JUDGE_BASE_URL` for any OpenAI-compatible gateway). The 3-run parity experiment used `JUDGE_MODEL=gpt-5.4`, and both `judge.py` and `parity_runner.py` retry judge calls up to 16 times to absorb transient HTTP 403/5xx gateway errors.
 - Tasks `blb-core-049` and `blb-core-096` have no attached documents.
 - In `blb-workflows/spa/spa-samples.csv`, `Conditions Precedent to Closing Transaction` combines Mutual/Buyer/Seller sections into one column while `schema.json` separates `conditions_to_sellers_obligations` and `conditions_to_buyers_obligations`; the adapter splits the column deterministically into those two arrays so all 29 deal-point fields align with `schema.json`.
 
