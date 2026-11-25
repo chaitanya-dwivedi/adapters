@@ -1,4 +1,4 @@
-"""OpenAI and Anthropic compatible LLM client for 2077AI and standard endpoints.
+"""OpenAI and Anthropic compatible LLM client for standard and custom endpoints.
 
 Uses Python standard library HTTP (``urllib``) so it works with zero extra runtime
 dependencies both on the Harbor host and inside the upstream parity runner.
@@ -125,7 +125,7 @@ def _lookup_env(env: Mapping[str, str] | None, *names: str) -> str | None:
 
 
 class T3ALlmClient:
-    """Text-only LLM client supporting OpenAI and Anthropic compatible 2077AI endpoints."""
+    """Text-only LLM client supporting OpenAI and Anthropic compatible endpoints."""
 
     def __init__(
         self,

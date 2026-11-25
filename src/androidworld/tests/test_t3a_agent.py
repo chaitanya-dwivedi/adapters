@@ -1,4 +1,4 @@
-"""Unit tests for Harbor T3AAgent, 2077AI LLM client, and symmetric parity runner."""
+"""Unit tests for Harbor T3AAgent, LLM client, and symmetric parity runner."""
 
 from __future__ import annotations
 
@@ -344,11 +344,11 @@ def test_parse_reason_action_and_json_action_validation(
 
 
 # ---------------------------------------------------------------------------
-# 2. 2077AI OpenAI / Anthropic LLM Client Tests
+# 2. Custom Gateway OpenAI / Anthropic LLM Client Tests
 # ---------------------------------------------------------------------------
 
 
-def test_llm_client_openai_2077ai_endpoint_and_payload(
+def test_llm_client_openai_gateway_endpoint_and_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: list[tuple[str, dict[str, str], dict[str, Any]]] = []
@@ -371,15 +371,15 @@ def test_llm_client_openai_2077ai_endpoint_and_payload(
     client = T3ALlmClient(
         model_name="openai/gpt-4o-2024-11-20",
         env={
-            "OPENAI_BASE_URL": "https://api.2077ai.example/v1/",
-            "OPENAI_API_KEY": "sk-2077-openai",
+            "OPENAI_BASE_URL": "https://api.gateway.example/v1/",
+            "OPENAI_API_KEY": "sk-test-openai",
         },
     )
     pred = client.predict_with_usage("test prompt")
 
     assert client.protocol == "openai"
-    assert captured[0][0] == "https://api.2077ai.example/v1/chat/completions"
-    assert captured[0][1]["Authorization"] == "Bearer sk-2077-openai"
+    assert captured[0][0] == "https://api.gateway.example/v1/chat/completions"
+    assert captured[0][1]["Authorization"] == "Bearer sk-test-openai"
     assert captured[0][2] == {
         "model": "gpt-4o-2024-11-20",
         "temperature": 0.0,
@@ -391,7 +391,7 @@ def test_llm_client_openai_2077ai_endpoint_and_payload(
     assert pred.is_safe is None
 
 
-def test_llm_client_anthropic_2077ai_endpoint_and_payload(
+def test_llm_client_anthropic_gateway_endpoint_and_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: list[tuple[str, dict[str, str], dict[str, Any]]] = []
@@ -408,15 +408,15 @@ def test_llm_client_anthropic_2077ai_endpoint_and_payload(
     client = T3ALlmClient(
         model_name="anthropic/claude-sonnet-4-5-20250929",
         env={
-            "ANTHROPIC_BASE_URL": "https://api.2077ai.example/anthropic",
-            "ANTHROPIC_API_KEY": "sk-2077-ant",
+            "ANTHROPIC_BASE_URL": "https://api.gateway.example/anthropic",
+            "ANTHROPIC_API_KEY": "sk-test-ant",
         },
     )
     pred = client.predict_with_usage("anthropic prompt")
 
     assert client.protocol == "anthropic"
-    assert captured[0][0] == "https://api.2077ai.example/anthropic/v1/messages"
-    assert captured[0][1]["x-api-key"] == "sk-2077-ant"
+    assert captured[0][0] == "https://api.gateway.example/anthropic/v1/messages"
+    assert captured[0][1]["x-api-key"] == "sk-test-ant"
     assert captured[0][1]["anthropic-version"] == "2023-06-01"
     assert captured[0][2] == {
         "model": "claude-sonnet-4-5-20250929",
@@ -431,11 +431,11 @@ def test_llm_client_anthropic_2077ai_endpoint_and_payload(
     client_v1 = T3ALlmClient(
         model_name="claude-3-5-sonnet-20241022",
         env={
-            "ANTHROPIC_BASE_URL": "https://api.2077ai.example/v1",
-            "ANTHROPIC_API_KEY": "sk-2077-ant",
+            "ANTHROPIC_BASE_URL": "https://api.gateway.example/v1",
+            "ANTHROPIC_API_KEY": "sk-test-ant",
         },
     )
-    assert client_v1.endpoint_url == "https://api.2077ai.example/v1/messages"
+    assert client_v1.endpoint_url == "https://api.gateway.example/v1/messages"
 
 
 def test_llm_client_retries_and_safety_classifier(
@@ -467,7 +467,7 @@ def test_llm_client_retries_and_safety_classifier(
     assert pred.is_safe is False
 
 
-def test_llm_client_2077ai_gpt5_and_verified_models(
+def test_llm_client_gateway_gpt5_and_verified_models(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: list[tuple[str, dict[str, str], dict[str, Any]]] = []
@@ -487,9 +487,9 @@ def test_llm_client_2077ai_gpt5_and_verified_models(
 
     monkeypatch.setattr(T3ALlmClient, "_post_json", fake_post)
 
-    # 1. gpt-5-mini and gpt-5.4 at https://app.ppapi.ai/v1 and https://app.ppapi.ai
+    # 1. gpt-5-mini and gpt-5.4 at https://gateway.example/v1 and https://gateway.example
     for model_id in ("openai/gpt-5-mini", "gpt-5-mini", "openai/gpt-5.4", "gpt-5.4"):
-        for base in ("https://app.ppapi.ai/v1", "https://app.ppapi.ai"):
+        for base in ("https://gateway.example/v1", "https://gateway.example"):
             captured.clear()
             client = T3ALlmClient(
                 model_name=model_id,
@@ -497,7 +497,7 @@ def test_llm_client_2077ai_gpt5_and_verified_models(
             )
             client.predict_with_usage("hi")
             url, headers, payload = captured[0]
-            assert url == "https://app.ppapi.ai/v1/chat/completions"
+            assert url == "https://gateway.example/v1/chat/completions"
             assert headers["Authorization"] == "Bearer sk-test"
             assert payload["model"] == model_id.removeprefix("openai/")
             assert payload["max_completion_tokens"] == 1000
@@ -508,17 +508,17 @@ def test_llm_client_2077ai_gpt5_and_verified_models(
     captured.clear()
     client_4o = T3ALlmClient(
         model_name="gpt-4o",
-        env={"OPENAI_BASE_URL": "https://app.ppapi.ai", "OPENAI_API_KEY": "sk-test"},
+        env={"OPENAI_BASE_URL": "https://gateway.example", "OPENAI_API_KEY": "sk-test"},
     )
     client_4o.predict_with_usage("hi")
-    assert captured[0][0] == "https://app.ppapi.ai/v1/chat/completions"
+    assert captured[0][0] == "https://gateway.example/v1/chat/completions"
     assert captured[0][2]["max_tokens"] == 1000
     assert captured[0][2]["temperature"] == 0.0
     assert "max_completion_tokens" not in captured[0][2]
 
-    # 3. claude-sonnet-4-6 and claude-haiku-4-5 at https://app.ppapi.ai and https://app.ppapi.ai/v1
+    # 3. claude-sonnet-4-6 and claude-haiku-4-5 at https://gateway.example and https://gateway.example/v1
     for model_id in ("claude-sonnet-4-6", "anthropic/claude-sonnet-4-6", "claude-haiku-4-5"):
-        for base in ("https://app.ppapi.ai", "https://app.ppapi.ai/v1"):
+        for base in ("https://gateway.example", "https://gateway.example/v1"):
             captured.clear()
             client_c = T3ALlmClient(
                 model_name=model_id,
@@ -526,7 +526,7 @@ def test_llm_client_2077ai_gpt5_and_verified_models(
             )
             client_c.predict_with_usage("hi")
             assert client_c.protocol == "anthropic"
-            assert captured[0][0] == "https://app.ppapi.ai/v1/messages"
+            assert captured[0][0] == "https://gateway.example/v1/messages"
             assert captured[0][2]["model"] == model_id.removeprefix("anthropic/")
             assert captured[0][2]["max_tokens"] == 1000
             assert captured[0][2]["temperature"] == 0.0
@@ -645,7 +645,7 @@ def test_harbor_agent_factory_instantiation_and_capabilities(tmp_path: Path) -> 
         "androidworld.agents:T3AAgent",
         logs_dir=tmp_path,
         model_name="openai/gpt-4o-2024-11-20",
-        base_url="https://api.2077ai.example/v1",
+        base_url="https://api.gateway.example/v1",
         extra_env={"OPENAI_API_KEY": "sk-test"},
         temperature=0.0,
         max_tokens=1000,
@@ -653,7 +653,7 @@ def test_harbor_agent_factory_instantiation_and_capabilities(tmp_path: Path) -> 
     assert isinstance(agent, T3AAgent)
     assert agent.options.temperature == 0.0
     assert agent.options.max_tokens == 1000
-    assert agent.options.base_url == "https://api.2077ai.example/v1"
+    assert agent.options.base_url == "https://api.gateway.example/v1"
 
 
 def test_t3a_agent_and_upstream_t3a_produce_identical_prompts_and_actions(
@@ -772,7 +772,7 @@ def test_t3a_agent_and_upstream_t3a_produce_identical_prompts_and_actions(
             logs_dir=logs_dir,
             model_name="openai/gpt-4o-2024-11-20",
             extra_env={
-                "OPENAI_BASE_URL": "https://api.2077ai.example/v1",
+                "OPENAI_BASE_URL": "https://api.gateway.example/v1",
                 "OPENAI_API_KEY": "sk-test",
             },
         )
