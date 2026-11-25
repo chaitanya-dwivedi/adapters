@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.request
 
 POS_RE = re.compile(r"\((\d+(?:\.\d+)?)\s*points?\)\s*$", re.I)
@@ -249,13 +250,15 @@ def score_spa(ground_truth: dict, prediction: dict, judge=None) -> tuple[float, 
         verdict = None
         last_err = None
         prompt = build_spa_prompt(pending)
-        for attempt in range(3):
+        for attempt in range(6):
             try:
                 verdict = judge(prompt)
                 break
             except Exception as e:  # noqa: BLE001
                 last_err = e
                 print(f"judge attempt {attempt+1} failed: {e}", file=sys.stderr)
+                if attempt < 5:
+                    time.sleep(min(2 * (attempt + 1), 10))
         if verdict is None:
             raise RuntimeError(f"judge unavailable: {last_err}")
         judged_fields = verdict.get("fields", {})
@@ -275,7 +278,7 @@ def call_judge(prompt: str) -> dict:
     url = base + "/chat/completions" if base.endswith("/v1") else base + "/v1/chat/completions"
     body = json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}]}).encode()
     req = urllib.request.Request(url, data=body, headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
+    with urllib.request.urlopen(req, timeout=180) as r:
         content = json.load(r)["choices"][0]["message"]["content"]
     m = re.search(r"\{.*\}", content, re.S)
     return json.loads(m.group(0))
@@ -292,12 +295,14 @@ def _run_core(a, judge) -> int:
         open(a.out, "w").write("0\n")
         return 0
     verdict = None
-    for attempt in range(3):
+    for attempt in range(6):
         try:
             verdict = judge(build_prompt(positives, negatives, answer))
             break
         except Exception as e:  # noqa: BLE001
             print(f"judge attempt {attempt+1} failed: {e}", file=sys.stderr)
+            if attempt < 5:
+                time.sleep(min(2 * (attempt + 1), 10))
     if verdict is None:
         print("judge unavailable; no reward written", file=sys.stderr)
         return 1
