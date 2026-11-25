@@ -17,7 +17,7 @@ BigLaw Bench (BLB) by Harvey evaluates LLMs/agents on real-world legal work prod
 
 ## Adapter Features
 
-- Downloads `core-samples.csv`, `spa-samples.csv`, `schema.json`, and all task PDFs from the pinned upstream commit at generation time; **no upstream data is committed**. Generated PDFs are baked into each task's `environment/documents/` (and `/app/schema.json` for SPA tasks).
+- Fetches `core-samples.csv` and `spa-samples.csv` from the pinned upstream commit at generation time, while generated `Dockerfile`s `curl` each task's PDFs (and `/app/schema.json` for SPA tasks) directly from the pinned commit at `docker build` time; **no upstream PDFs or CSVs are committed to `adapters` or `harbor-datasets`**.
 - Task IDs: `blb-core-004`, ..., `blb-core-096` and `blb-spa-001`, ..., `blb-spa-010`; task names `harvey/biglawbench__blb-core-XXX` and `harvey/biglawbench__blb-spa-XXX`.
 - **Separate verifier isolation:** Tasks declare `artifacts` (`/app/answer.md` or `/app/answer.json`) and `[verifier].environment_mode = "separate"`, keeping the agent and verifier phases isolated (`harbor lint` clean).
 - **Verifier (`tests/judge.py`, stdlib-only):**
@@ -34,13 +34,13 @@ biglawbench/
 ├── blb-core-004/
 │   ├── task.toml
 │   ├── instruction.md
-│   ├── environment/{Dockerfile, documents/*.pdf}
+│   ├── environment/Dockerfile    # fetches upstream PDFs at build time
 │   ├── solution/{solve.sh, answer.md}
 │   └── tests/{test.sh, judge.py, rubric.md}
 ├── blb-spa-001/
 │   ├── task.toml
 │   ├── instruction.md
-│   ├── environment/{Dockerfile, schema.json, documents/*.pdf}
+│   ├── environment/Dockerfile    # fetches upstream PDF + schema.json at build time
 │   ├── solution/{solve.sh, answer.json}
 │   └── tests/{test.sh, judge.py, ground_truth.json}
 ```

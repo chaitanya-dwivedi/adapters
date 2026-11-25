@@ -1,13 +1,15 @@
 """Adapter: BigLaw Bench (6 BLB-Core + 10 BLB-Workflows/SPA = 16 public tasks) -> Harbor tasks.
 
-Source: https://github.com/harveyai/biglaw-bench (pinned commit). PDFs, CSVs, and schema
-are downloaded at generation time; nothing from the upstream dataset is committed to this repo.
+Source: https://github.com/harveyai/biglaw-bench (pinned commit). CSVs are fetched at
+generation time, while PDFs and schema.json are fetched during Docker image build;
+nothing from the upstream dataset is committed to adapters or harbor-datasets.
 """
 
 import csv
 import io
 import json
 import re
+import shlex
 import shutil
 import urllib.parse
 import urllib.request
@@ -312,9 +314,20 @@ class BigLawBenchAdapter:
                 return None
             shutil.rmtree(dest)
         shutil.copytree(TEMPLATE_DIR, dest)
-        (dest / "environment" / "documents").mkdir(parents=True)
-        (dest / "environment" / "documents" / ".keep").write_text("")
         return dest
+
+    @staticmethod
+    def _append_dockerfile_downloads(dest: Path, downloads: list[tuple[str, str]]) -> None:
+        if not downloads:
+            return
+        cmds = [
+            f"curl -fsSL --retry 3 {shlex.quote(url)} -o {shlex.quote(target)}"
+            for url, target in downloads
+        ]
+        dockerfile_path = dest / "environment" / "Dockerfile"
+        dockerfile = dockerfile_path.read_text()
+        dockerfile = dockerfile.rstrip() + "\nRUN " + " \\\n    && ".join(cmds) + "\n"
+        dockerfile_path.write_text(dockerfile)
 
     def _render_toml(self, dest: Path, subs: dict[str, str]) -> None:
         toml = (dest / "task.toml").read_text()
@@ -329,8 +342,10 @@ class BigLawBenchAdapter:
             return
 
         docs = [d.strip() for d in rec["Document(s)"].splitlines() if d.strip() and d.strip().upper() != "N/A"]
-        for d in docs:
-            (dest / "environment" / "documents" / d).write_bytes(_fetch(RAW_CORE, f"documents/{d}"))
+        self._append_dockerfile_downloads(
+            dest,
+            [(f"{RAW_CORE}/{urllib.parse.quote(f'documents/{d}')}", f"/app/documents/{d}") for d in docs],
+        )
 
         prompt = rec["Prompt"].strip()
         rubric = rec["Rubric"].strip() + "\n"
@@ -379,13 +394,13 @@ class BigLawBenchAdapter:
 
         doc_name = rec["Documents"].strip()
         idx = int(rec["_index"])
-        (dest / "environment" / "documents" / doc_name).write_bytes(_fetch(RAW_SPA, f"documents/{doc_name}"))
-        (dest / "environment" / "schema.json").write_bytes(schema_bytes)
-
-        dockerfile = (dest / "environment" / "Dockerfile").read_text()
-        if "COPY schema.json /app/schema.json" not in dockerfile:
-            dockerfile = dockerfile.rstrip() + "\nCOPY schema.json /app/schema.json\n"
-            (dest / "environment" / "Dockerfile").write_text(dockerfile)
+        self._append_dockerfile_downloads(
+            dest,
+            [
+                (f"{RAW_SPA}/{urllib.parse.quote(f'documents/{doc_name}')}", f"/app/documents/{doc_name}"),
+                (f"{RAW_SPA}/schema.json", "/app/schema.json"),
+            ],
+        )
 
         self._render_toml(
             dest,
