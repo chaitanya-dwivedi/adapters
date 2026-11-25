@@ -87,7 +87,7 @@ To regenerate `tasks.json` from upstream: `python scripts/export_tasks.py --aw-p
 
 ## Comparison with Original Benchmark (Parity)
 
-Not run yet (blocked on x86_64 `/dev/kvm` host; parity plan pending Harbor team sign-off). See `parity_experiment.json`.
+Full Harbor-vs-original parity is awaiting a Linux `x86_64` host with `/dev/kvm` for Harbor `linux/amd64` container execution. On the original upstream side, 1 full 35-task `--split parity` baseline (`T3AAgent` + `anthropic/claude-sonnet-4-6` on Apple M5 HVF) completed cleanly (**`35/35` scored, `0` exceptions, `68.57%` / `24/35` passed**). See `parity_experiment.json`.
 
 ```bash
 # Harbor side (35-task --split parity subset with Scenario 3 T3AAgent)
@@ -97,12 +97,12 @@ cd ../..
 harbor run -p datasets/androidworld-parity --agent-import-path androidworld.agents:T3AAgent -m "<provider>/<pinned-dated-model-id>"
 
 # Original upstream side (symmetric 35-task --split parity runner)
-./original_parity_runner/run_parity.sh --split parity --model "<provider>/<pinned-dated-model-id>"
+./original_parity_runner/run_parity.sh --split parity --model "anthropic/claude-sonnet-4-6"
 ```
 
 | Agent | Model | Metric | Number of Runs | Dataset Size | Original Benchmark Performance | Harbor Adapter Performance |
 |-------|-------|--------|------------------|--------------|------------------------------|----------------------------|
-| TBD | TBD | success rate | TBD | TBD | TBD | TBD |
+| TBD | TBD | success rate | TBD | 35 (parity split) | `68.57%` (1×35 baseline: 24/35) | TBD (needs Linux x86_64 `/dev/kvm`) |
 
 ## Notes & Caveats
 
